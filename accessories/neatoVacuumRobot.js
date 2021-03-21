@@ -1,6 +1,3 @@
-const debug = require('debug')('homebridge-neato');
-const colors = require('colors');
-
 const CustomUUID = {
 	SpotCleanWidth: 'A7889A9A-2F27-4293-BEF8-3FE805B36F4E',
 	SpotCleanHeight: 'CA282DB2-62BF-4325-A1BE-F8BB5478781A',
@@ -24,100 +21,107 @@ module.exports = function (_Service, _Characteristic)
 	return NeatoVacuumRobotAccessory;
 };
 
-function NeatoVacuumRobotAccessory(platform, robotObject)
-{
-	this.platform = platform;
-	this.log = platform.log;
-	this.refresh = platform.refresh;
-	this.hiddenServices = platform.hiddenServices;
-	this.nextRoom = platform.nextRoom;
-
-	this.robotObject = robotObject;
-	this.robot = robotObject.device;
-	this.meta = robotObject.meta;
-	this.spotPlusFeatures = ((typeof robotObject.availableServices.spotCleaning !== 'undefined') && robotObject.availableServices.spotCleaning.includes("basic"));
-	this.boundary = (typeof robotObject.boundary === 'undefined') ? null : robotObject.boundary;
-
-	if (this.boundary == null)
+class NeatoVacuumRobotAccessory {
+	constructor(platform, robotObject)
 	{
-		this.name = this.robot.name;
-	}
-	else
-	{
-		// if boundary name already exists
-		if (platform.boundaryNames.includes(this.boundary.name))
+		this.platform = platform;
+		this.log = platform.log;
+		this.api = platform.api;
+		
+		this.refresh = platform.refresh;
+		this.hiddenServices = platform.hiddenServices;
+		this.nextRoom = platform.nextRoom;
+
+		this.robotObject = robotObject;
+		this.robot = robotObject.device;
+		this.meta = robotObject.meta;
+		this.spotPlusFeatures = ((typeof robotObject.availableServices.spotCleaning !== 'undefined') && robotObject.availableServices.spotCleaning.includes("basic"));
+		this.boundary = (typeof robotObject.boundary === 'undefined') ? null : robotObject.boundary;
+
+		let name;
+		if (this.boundary == null)
 		{
-			let lastChar = this.boundary.name.slice(-1);
-			// boundary name already contains a count number
-			if (!isNaN(lastChar))
+			name = this.robot.name;
+		}
+		else
+		{
+			// if boundary name already exists
+			if (platform.boundaryNames.includes(this.boundary.name))
 			{
-				// Increment existing count number
-				this.boundary.name = this.boundary.name.slice(0, -1) + (parseInt(lastChar) + 1);
+				let lastChar = this.boundary.name.slice(-1);
+				// boundary name already contains a count number
+				if (!isNaN(lastChar))
+				{
+					// Increment existing count number
+					this.boundary.name = this.boundary.name.slice(0, -1) + (parseInt(lastChar) + 1);
+				}
+				else
+				{
+					// Add a new count number
+					this.boundary.name = this.boundary.name + " 2";
+				}
 			}
-			else
+			platform.boundaryNames.push(this.boundary.name);
+			name = this.robot.name + ' - ' + this.boundary.name;
+		}
+
+		this.accessory = new api.PlatformAccessory(
+			name,
+			api.hap.uuid.generate("Neato:" + name + ":" + this.robot._serial)
+			)
+
+		this.batteryService = new Service.BatteryService("Battery", "battery");
+
+		if (this.boundary == null)
+		{
+			this.cleanService = new Service.Switch(this.name + " Clean", "clean");
+			this.goToDockService = new Service.Switch(this.name + " Go to Dock", "goToDock");
+			this.dockStateService = new Service.OccupancySensor(this.name + " Dock", "dockState");
+			this.ecoService = new Service.Switch(this.name + " Eco Mode", "eco");
+			this.noGoLinesService = new Service.Switch(this.name + " NoGo Lines", "noGoLines");
+			this.extraCareService = new Service.Switch(this.name + " Extra Care", "extraCare");
+			this.scheduleService = new Service.Switch(this.name + " Schedule", "schedule");
+			this.findMeService = new Service.Switch(this.name + " Find Me", "findMe");
+
+			this.spotCleanService = new Service.Switch(this.name + " Clean Spot", "cleanSpot");
+			this.spotCleanService.addCharacteristic(SpotRepeatCharacteristic);
+			if (this.spotPlusFeatures)
 			{
-				// Add a new count number
-				this.boundary.name = this.boundary.name + " 2";
+				this.spotCleanService.addCharacteristic(SpotWidthCharacteristic);
+				this.spotCleanService.addCharacteristic(SpotHeightCharacteristic);
 			}
 		}
-		platform.boundaryNames.push(this.boundary.name);
-		this.name = this.robot.name + ' - ' + this.boundary.name;
-	}
-
-	this.batteryService = new Service.BatteryService("Battery", "battery");
-
-	if (this.boundary == null)
-	{
-		this.cleanService = new Service.Switch(this.name + " Clean", "clean");
-		this.goToDockService = new Service.Switch(this.name + " Go to Dock", "goToDock");
-		this.dockStateService = new Service.OccupancySensor(this.name + " Dock", "dockState");
-		this.ecoService = new Service.Switch(this.name + " Eco Mode", "eco");
-		this.noGoLinesService = new Service.Switch(this.name + " NoGo Lines", "noGoLines");
-		this.extraCareService = new Service.Switch(this.name + " Extra Care", "extraCare");
-		this.scheduleService = new Service.Switch(this.name + " Schedule", "schedule");
-		this.findMeService = new Service.Switch(this.name + " Find Me", "findMe");
-
-		this.spotCleanService = new Service.Switch(this.name + " Clean Spot", "cleanSpot");
-		this.spotCleanService.addCharacteristic(SpotRepeatCharacteristic);
-		if (this.spotPlusFeatures)
+		else
 		{
-			this.spotCleanService.addCharacteristic(SpotWidthCharacteristic);
-			this.spotCleanService.addCharacteristic(SpotHeightCharacteristic);
-		}
-	}
-	else
-	{
-		const splitName = this.boundary.name.split(' ');
-		let serviceName = "Clean the " + this.boundary.name;
-		if (splitName.length >= 2 && splitName[splitName.length - 2].match(/[']s$/g))
-		{
-			serviceName = "Clean " + this.boundary.name;
-		}
-		this.cleanService = new Service.Switch(serviceName, "cleanBoundary:" + this.boundary.id);
-	}
-
-	this.log("Added cleaning device named: " + this.name);
-}
-
-NeatoVacuumRobotAccessory.prototype = {
-	identify: function (callback)
-	{
-		this.robot.getState((error, result) =>
-		{
-			if (error)
+			const splitName = this.boundary.name.split(' ');
+			let serviceName = "Clean the " + this.boundary.name;
+			if (splitName.length >= 2 && splitName[splitName.length - 2].match(/[']s$/g))
 			{
-				this.log.error("Error getting robot information: " + error + ": " + result);
+				serviceName = "Clean " + this.boundary.name;
 			}
-			else
-			{
-				this.log("### Robot information ###");
-				this.log(result);
-			}
-			callback();
-		});
-	},
+			this.cleanService = new Service.Switch(serviceName, "cleanBoundary:" + this.boundary.id);
+		}
 
-	getServices: function ()
+		this.log("Added cleaning device named: " + this.name);
+	}
+
+	identify(callback)
+	{
+		// try {
+		// 	await this.robot.getState();
+		// }
+		// catch (error) {
+		// 	this.log.error("Error getting robot information: " + error + ": " + result);
+		// }
+
+		this.log.debug(`Identify request for ${this.name}`);
+		// this.log(result);
+
+		callback();
+
+	}
+
+	getServices()
 	{
 		this.informationService = new Service.AccessoryInformation();
 		this.informationService
@@ -194,33 +198,30 @@ NeatoVacuumRobotAccessory.prototype = {
 		}
 
 		return this.services;
-	},
+	}
 
-
-	getClean: function (callback)
+	async getClean(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, (error, result) =>
+		await this.platform.updateRobot(this.robot._serial)
+
+		let cleaning;
+		if (this.boundary == null)
 		{
-			let cleaning;
-			if (this.boundary == null)
-			{
-				cleaning = this.robot.canPause;
-			}
-			else
-			{
-				cleaning = this.robot.canPause && (this.robot.cleaningBoundaryId === this.boundary.id)
-			}
+			cleaning = this.robot.canPause;
+		}
+		else
+		{
+			cleaning = this.robot.canPause && (this.robot.cleaningBoundaryId === this.boundary.id)
+		}
 
-			debug(this.name + ": Cleaning is " + (cleaning ? 'ON'.brightGreen : 'OFF'.red));
-			callback(false, cleaning);
-		});
-	},
+		this.log.debug(this.name + ": Cleaning is " + (cleaning ? 'ON' : 'OFF'));
+		callback(false, cleaning);
+	}
 
-	setClean: function (on, callback)
+	async setClean(on, callback)
 	{
-		debug(this.name + ": " + (on ? "Enabled ".brightGreen : "Disabled".red) + " Clean " + (this.boundary ? JSON.stringify(this.boundary) : ''));
-		this.platform.updateRobot(this.robot._serial, (error, result) =>
-		{
+		this.log.debug(this.name + ": " + (on ? "Enabled " : "Disabled") + " Clean " + (this.boundary ? JSON.stringify(this.boundary) : ''));
+		await this.platform.updateRobot(this.robot._serial)
 			// Start
 			if (on)
 			{
@@ -230,19 +231,19 @@ NeatoVacuumRobotAccessory.prototype = {
 					// Resume cleaning
 					if (this.robot.canResume)
 					{
-						debug(this.name + ": ## Resume cleaning");
+						this.log.debug(this.name + ": ## Resume cleaning");
 						this.robot.resumeCleaning(callback);
 					}
 					// Start cleaning
 					else if (this.robot.canStart)
 					{
-						debug(this.name + ": ## Start cleaning");
+						this.log.debug(this.name + ": ## Start cleaning");
 						this.clean(callback);
 					}
 					// Cannot start
 					else
 					{
-						debug(this.name + ": Cannot start, maybe already cleaning (expected)");
+						this.log.debug(this.name + ": Cannot start, maybe already cleaning (expected)");
 						callback();
 					}
 				}
@@ -252,7 +253,7 @@ NeatoVacuumRobotAccessory.prototype = {
 					// Return to dock
 					if (this.robot.canPause || this.robot.canResume)
 					{
-						debug(this.name + ": ## Returning to dock to start cleaning of new room");
+						this.log.debug(this.name + ": ## Returning to dock to start cleaning of new room");
 						this.setGoToDock(true, (error, result) =>
 						{
 							this.nextRoom = this.boundary.id;
@@ -262,7 +263,7 @@ NeatoVacuumRobotAccessory.prototype = {
 					// Start new cleaning of new room
 					else
 					{
-						debug(this.name + ": ## Start cleaning of new room");
+						this.log.debug(this.name + ": ## Start cleaning of new room");
 						this.clean(callback);
 					}
 				}
@@ -272,19 +273,18 @@ NeatoVacuumRobotAccessory.prototype = {
 			{
 				if (this.robot.canPause)
 				{
-					debug(this.name + ": ## Pause cleaning");
+					this.log.debug(this.name + ": ## Pause cleaning");
 					this.robot.pauseCleaning(callback);
 				}
 				else
 				{
-					debug(this.name + ": Already paused");
+					this.log.debug(this.name + ": Already paused");
 					callback();
 				}
 			}
-		});
-	},
+	}
 
-	clean: function (callback, spot)
+	clean(callback, spot)
 	{
 		// Start automatic update while cleaning
 		if (this.refresh === 'auto')
@@ -299,7 +299,7 @@ NeatoVacuumRobotAccessory.prototype = {
 		let extraCare = this.robotObject.mainAccessory.extraCareService.getCharacteristic(Characteristic.On).value;
 		let nogoLines = this.robotObject.mainAccessory.noGoLinesService.getCharacteristic(Characteristic.On).value;
 		let room = (this.boundary == null) ? '' : this.boundary.name;
-		debug(this.name + ": ## Start cleaning (" + (room !== '' ? room + " " : '') + "eco: " + eco + ", extraCare: " + extraCare + ", nogoLines: " + nogoLines + ", spot: " + JSON.stringify(spot) + ")");
+		this.log.debug(this.name + ": ## Start cleaning (" + (room !== '' ? room + " " : '') + "eco: " + eco + ", extraCare: " + extraCare + ", nogoLines: " + nogoLines + ", spot: " + JSON.stringify(spot) + ")");
 
 		// Normal cleaning
 		if (this.boundary == null && (typeof spot === 'undefined'))
@@ -349,34 +349,33 @@ NeatoVacuumRobotAccessory.prototype = {
 				}
 			});
 		}
-	},
+	}
 
-	getGoToDock: function (callback)
+	getGoToDock(callback)
 	{
-		callback(false, false);
-	},
+		callback(null, false);
+	}
 
-	setGoToDock: function (on, callback)
+	async setGoToDock(on, callback)
 	{
-		this.platform.updateRobot(this.robot._serial, (error, result) =>
-		{
+		await this.platform.updateRobot(this.robot._serial)
 			if (on)
 			{
 				if (this.robot.canPause)
 				{
-					debug(this.name + ": ## Pause cleaning to go to dock");
+					this.log.debug(this.name + ": ## Pause cleaning to go to dock");
 					this.robot.pauseCleaning((error, result) =>
 					{
 						setTimeout(() =>
 						{
-							debug(this.name + ": ## Go to dock");
+							this.log.debug(this.name + ": ## Go to dock");
 							this.robot.sendToBase(callback);
 						}, 1000);
 					});
 				}
 				else if (this.robot.canGoToBase)
 				{
-					debug(this.name + ": ## Go to dock");
+					this.log.debug(this.name + ": ## Go to dock");
 					this.robot.sendToBase(callback);
 				}
 				else
@@ -389,93 +388,84 @@ NeatoVacuumRobotAccessory.prototype = {
 			{
 				callback();
 			}
-		});
-	},
 
-	getEco: function (callback)
+	}
+
+	async getEco(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Eco Mode is " + (this.robot.eco ? 'ON'.brightGreen : 'OFF'.red));
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Eco Mode is " + (this.robot.eco ? 'ON' : 'OFF'));
 			callback(false, this.robot.eco);
-		});
-	},
+	}
 
-	setEco: function (on, callback)
+	setEco(on, callback)
 	{
 		this.robot.eco = on;
-		debug(this.name + ": " + (on ? "Enabled ".red : "Disabled".red) + " Eco Mode ");
+		this.log.debug(this.name + ": " + (on ? "Enabled " : "Disabled") + " Eco Mode ");
 		callback();
-	},
+	}
 
-	getNoGoLines: function (callback)
+	async getNoGoLines(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": NoGoLine is " + (this.robot.eco ? 'ON'.brightGreen : 'OFF'.red));
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": NoGoLine is " + (this.robot.eco ? 'ON' : 'OFF'));
 			callback(false, this.robot.noGoLines ? 1 : 0);
-		});
-	},
+	}
 
-	setNoGoLines: function (on, callback)
+	setNoGoLines(on, callback)
 	{
 		this.robot.noGoLines = on;
-		debug(this.name + ": " + (on ? "Enabled ".brightGreen : "Disabled".red) + " NoGoLine ");
+		this.log.debug(this.name + ": " + (on ? "Enabled " : "Disabled") + " NoGoLine ");
 		callback();
-	},
+	}
 
-	getExtraCare: function (callback)
+	async getExtraCare(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Care Nav is " + (this.robot.navigationMode === 2 ? 'ON'.brightGreen : 'OFF'.red));
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Care Nav is " + (this.robot.navigationMode === 2 ? 'ON' : 'OFF'));
 			callback(false, this.robot.navigationMode === 2 ? 1 : 0);
-		});
-	},
+	}
 
-	setExtraCare: function (on, callback)
+	setExtraCare(on, callback)
 	{
 		this.robot.navigationMode = on ? 2 : 1;
-		debug(this.name + ": " + (on ? "Enabled ".brightGreen : "Disabled".red) + " Care Nav ");
+		this.log.debug(this.name + ": " + (on ? "Enabled " : "Disabled") + " Care Nav ");
 		callback();
-	},
+	}
 
-	getSchedule: function (callback)
+	async getSchedule(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Schedule is " + (this.robot.eco ? 'ON'.brightGreen : 'OFF'.red));
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Schedule is " + (this.robot.isScheduleEnabled ? 'ON' : 'OFF'));
 			callback(false, this.robot.isScheduleEnabled);
-		});
-	},
 
-	setSchedule: function (on, callback)
+	}
+
+	async setSchedule(on, callback)
 	{
-		this.platform.updateRobot(this.robot._serial, (error, result) =>
-		{
+		await this.platform.updateRobot(this.robot._serial)
 			if (on)
 			{
-				debug(this.name + ": " + "Enabled".brightGreen + " Schedule");
+				this.log.debug(this.name + ": " + "Enabled" + " Schedule");
 				this.robot.enableSchedule(callback);
 			}
 			else
 			{
-				debug(this.name + ": " + "Disabled".red + " Schedule");
+				this.log.debug(this.name + ": " + "Disabled" + " Schedule");
 				this.robot.disableSchedule(callback);
 			}
-		});
-	},
+	}
 
-	getFindMe: function (callback)
+	getFindMe(callback)
 	{
-		callback(false, false);
-	},
+		callback(null, false);
+	}
 
-	setFindMe: function (on, callback)
+	setFindMe(on, callback)
 	{
 		if (on)
 		{
-			debug(this.name + ": ## Find me");
+			this.log.debug(this.name + ": ## Find me");
 			setTimeout(() =>
 			{
 				this.findMeService.setCharacteristic(Characteristic.On, false);
@@ -483,14 +473,14 @@ NeatoVacuumRobotAccessory.prototype = {
 
 			this.robot.findMe(callback);
 		}
-	},
+	}
 
-	getSpotClean: function (callback)
+	getSpotClean(callback)
 	{
-		callback();
-	},
+		callback(null, false);
+	}
 
-	setSpotClean: function (on, callback)
+	async setSpotClean(on, callback)
 	{
 		let spot = {
 			width: this.spotPlusFeatures ? this.spotCleanService.getCharacteristic(SpotWidthCharacteristic).value : null,
@@ -498,15 +488,14 @@ NeatoVacuumRobotAccessory.prototype = {
 			repeat: this.spotCleanService.getCharacteristic(SpotRepeatCharacteristic).value
 		};
 
-		this.platform.updateRobot(this.robot._serial, (error, result) =>
-		{
+		await this.platform.updateRobot(this.robot._serial)
 			// Start
 			if (on)
 			{
 				// Resume cleaning
 				if (this.robot.canResume)
 				{
-					debug(this.name + ": ## Resume (spot) cleaning");
+					this.log.debug(this.name + ": ## Resume (spot) cleaning");
 					this.robot.resumeCleaning(callback);
 				}
 				// Start cleaning
@@ -517,7 +506,7 @@ NeatoVacuumRobotAccessory.prototype = {
 				// Cannot start
 				else
 				{
-					debug(this.name + ": Cannot start spot cleaning, maybe already cleaning");
+					this.log.debug(this.name + ": Cannot start spot cleaning, maybe already cleaning");
 					callback();
 				}
 			}
@@ -526,132 +515,110 @@ NeatoVacuumRobotAccessory.prototype = {
 			{
 				if (this.robot.canPause)
 				{
-					debug(this.name + ": ## Pause cleaning");
+					this.log.debug(this.name + ": ## Pause cleaning");
 					this.robot.pauseCleaning(callback);
 				}
 				else
 				{
-					debug(this.name + ": Already paused");
+					this.log.debug(this.name + ": Already paused");
 					callback();
 				}
 			}
-		});
-	},
 
-	getSpotWidth: function (callback)
+	}
+
+	async getSpotWidth(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Spot width  is " + this.robot.spotWidth + "cm");
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Spot width  is " + this.robot.spotWidth + "cm");
 			callback(false, this.robot.spotWidth);
-		});
-	},
+	}
 
-	setSpotWidth: function (width, callback)
+	setSpotWidth(width, callback)
 	{
 		this.robot.spotWidth = width;
-		debug(this.name + ": Set spot width to " + width + "cm");
+		this.log.debug(this.name + ": Set spot width to " + width + "cm");
 		callback();
-	},
+	}
 
-	getSpotHeight: function (callback)
+	async getSpotHeight(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Spot height is " + this.robot.spotHeight + "cm");
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Spot height is " + this.robot.spotHeight + "cm");
 			callback(false, this.robot.spotHeight);
-		});
-	},
+	}
 
-	setSpotHeight: function (height, callback)
+	setSpotHeight(height, callback)
 	{
 		this.robot.spotHeight = height;
-		debug(this.name + ": Set spot height to " + height + "cm");
+		this.log.debug(this.name + ": Set spot height to " + height + "cm");
 		callback();
-	},
+	}
 
-	getSpotRepeat: function (callback)
+	async getSpotRepeat(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Spot repeat is " + (this.robot.spotRepeat ? 'ON'.brightGreen : 'OFF'.red));
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Spot repeat is " + (this.robot.spotRepeat ? 'ON' : 'OFF'));
 			callback(false, this.robot.spotRepeat);
-		});
-	},
+	}
 
-	setSpotRepeat: function (on, callback)
+	setSpotRepeat(on, callback)
 	{
 		this.robot.spotRepeat = on;
-		debug(this.name + ": " + (on ? "Enabled ".brightGreen : "Disabled".red) + " Spot repeat");
+		this.log.debug(this.name + ": " + (on ? "Enabled " : "Disabled") + " Spot repeat");
 		callback();
-	},
+	}
 
-	getDock: function (callback)
+	async getDock(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": The Dock is " + (this.robot.isDocked ? "OCCUPIED".brightGreen : "NOT OCCUPIED".red));
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": The Dock is " + (this.robot.isDocked ? "OCCUPIED" : "NOT OCCUPIED"));
 			callback(false, this.robot.isDocked ? 1 : 0);
-		});
-	},
+	}
 
-	getBatteryLevel: function (callback)
+	async getBatteryLevel(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Battery  is " + this.robot.charge + "%");
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Battery  is " + this.robot.charge + "%");
 			callback(false, this.robot.charge);
-		});
-	},
+	}
 
-	getBatteryChargingState: function (callback)
+	async getBatteryChargingState(callback)
 	{
-		this.platform.updateRobot(this.robot._serial, () =>
-		{
-			debug(this.name + ": Battery  is " + (this.robot.isCharging ? "CHARGING".brightGreen : "NOT CHARGING".red));
+		await this.platform.updateRobot(this.robot._serial)
+			this.log.debug(this.name + ": Battery  is " + (this.robot.isCharging ? "CHARGING" : "NOT CHARGING"));
 			callback(false, this.robot.isCharging);
-		});
-	},
+	}
 
-	updated: function ()
+	updated()
 	{
 		if (this.boundary == null)
 		{
-			// only update these values if the state is different from the current one, otherwise we might accidentally start an action
-			if (this.cleanService.getCharacteristic(Characteristic.On).value !== this.robot.canPause)
-			{
-				this.cleanService.setCharacteristic(Characteristic.On, this.robot.canPause);
-			}
+			this.cleanService.updateCharacteristic(Characteristic.On, this.robot.canPause);
 
 			// dock switch is on (dock not seen before) and dock has just been seen -> turn switch off
 			if (this.goToDockService.getCharacteristic(Characteristic.On).value == true && this.robot.dockHasBeenSeen)
 			{
-				this.goToDockService.setCharacteristic(Characteristic.On, false);
+				this.goToDockService.updateCharacteristic(Characteristic.On, false);
 			}
 
-			if (this.scheduleService.getCharacteristic(Characteristic.On).value !== this.robot.isScheduleEnabled)
-			{
-				this.scheduleService.setCharacteristic(Characteristic.On, this.robot.isScheduleEnabled);
-			}
+			this.scheduleService.updateCharacteristic(Characteristic.On, this.robot.isScheduleEnabled);
+			this.dockStateService.updateCharacteristic(Characteristic.OccupancyDetected, this.robot.isDocked ? 1 : 0);
+			this.ecoService.updateCharacteristic(Characteristic.On, this.robot.eco);
+			this.noGoLinesService.updateCharacteristic(Characteristic.On, this.robot.noGoLines);
+			this.extraCareService.updateCharacteristic(Characteristic.On, this.robot.extraCare);
 
-			// no commands here, values can be updated without problems
-			this.dockStateService.setCharacteristic(Characteristic.OccupancyDetected, this.robot.isDocked ? 1 : 0);
-
-			this.ecoService.setCharacteristic(Characteristic.On, this.robot.eco);
-			this.noGoLinesService.setCharacteristic(Characteristic.On, this.robot.noGoLines);
-			this.extraCareService.setCharacteristic(Characteristic.On, this.robot.navigationMode == 2 ? true : false);
-
-			this.spotCleanService.setCharacteristic(SpotRepeatCharacteristic, this.robot.spotRepeat);
+			this.spotCleanService.updateCharacteristic(SpotRepeatCharacteristic, this.robot.spotRepeat);
 
 			if (this.spotPlusFeatures)
 			{
-					this.spotCleanService.setCharacteristic(SpotWidthCharacteristic, this.robot.spotWidth);
-					this.spotCleanService.setCharacteristic(SpotHeightCharacteristic, this.robot.spotHeight);
+				this.spotCleanService.updateCharacteristic(SpotWidthCharacteristic, this.robot.spotWidth);
+				this.spotCleanService.updateCharacteristic(SpotHeightCharacteristic, this.robot.spotHeight);
 			}
 		}
 
-		this.batteryService.setCharacteristic(Characteristic.BatteryLevel, this.robot.charge);
-		this.batteryService.setCharacteristic(Characteristic.ChargingState, this.robot.isCharging);
+		this.batteryService.updateCharacteristic(Characteristic.BatteryLevel, this.robot.charge);
+		this.batteryService.updateCharacteristic(Characteristic.ChargingState, this.robot.isCharging);
 
 		// Robot has a next room to clean in queue
 		if (this.nextRoom != null && this.robot.isDocked)
@@ -659,8 +626,8 @@ NeatoVacuumRobotAccessory.prototype = {
 			this.clean((error, result) =>
 			{
 				this.nextRoom = null;
-				debug("## Starting cleaning of next room");
+				this.log.debug("## Starting cleaning of next room");
 			});
 		}
 	}
-};
+}

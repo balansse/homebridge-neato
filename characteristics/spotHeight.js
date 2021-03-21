@@ -9,7 +9,7 @@ module.exports = function (Characteristic, CustomUUID)
 			format: Characteristic.Formats.INT,
 			unit: 'cm',
 			maxValue: 400,
-			minValue: 100,
+			minValue: 0,
 			minStep: 50,
 			perms: [Characteristic.Perms.READ, Characteristic.Perms.WRITE]
 		});
